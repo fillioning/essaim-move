@@ -82,8 +82,8 @@ static inline float fast_tanh(float x) {
 
 typedef struct {
     int   active;          /* voice producing sound */
-    float clock_phase;     /* 0–1 retrigger clock */
-    float env;             /* decay envelope 0–1 */
+    float lfo_phase;       /* 0–1 volume LFO phase */
+    float env;             /* onset decay envelope 0–1 */
     float osc_phase;       /* oscillator phase 0–1 */
 
     /* SVF filter state */
@@ -93,6 +93,7 @@ typedef struct {
     int   svf_mode;        /* 0=LP, 1=BP, 2=HP */
     float svf_q;           /* resonance 0.3–0.95 */
     float pan;             /* -1 to 1 stereo position */
+    int   lfo_shape;       /* 0=sine, 1=triangle, 2=saw, 3=square */
 
     /* User params */
     float speed;           /* retrigger rate Hz */
@@ -161,6 +162,21 @@ static inline float osc_shape(float phase, float timbre) {
     }
 }
 
+/* ── LFO shape (unipolar 0–1, random per voice) ───────────────────────────── */
+
+static inline float lfo_shape(float phase, int shape) {
+    switch (shape) {
+        case 1:  /* triangle */
+            return 1.0f - 2.0f * fabsf(phase - 0.5f);
+        case 2:  /* sawtooth (ramp down → sharp attack, slow fade) */
+            return 1.0f - phase;
+        case 3:  /* square */
+            return phase < 0.5f ? 1.0f : 0.0f;
+        default: /* sine (unipolar) */
+            return 0.5f + 0.5f * sinf(phase * TWO_PI);
+    }
+}
+
 /* ── Lifecycle ─────────────────────────────────────────────────────────────── */
 
 static void *create_instance(const char *module_dir, const char *json_defaults) {
@@ -180,14 +196,15 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     for (int i = 0; i < N_VOICES; i++) {
         voice_t *v = &inst->voices[i];
         v->active = 0;
-        v->clock_phase = rand_float(&inst->rng); /* stagger clocks */
+        v->lfo_phase = rand_float(&inst->rng); /* stagger LFOs */
         v->env = 0.0f;
         v->osc_phase = rand_float(&inst->rng);
 
         /* Random SVF mode and Q — NOT user-controllable */
-        v->svf_mode = (int)(rand_float(&inst->rng) * 3.0f) % 3;
-        v->svf_q    = rand_range(&inst->rng, 0.3f, 0.95f);
-        v->pan      = rand_range(&inst->rng, -0.7f, 0.7f);
+        v->svf_mode  = (int)(rand_float(&inst->rng) * 3.0f) % 3;
+        v->svf_q     = rand_range(&inst->rng, 0.3f, 0.95f);
+        v->pan       = rand_range(&inst->rng, -0.7f, 0.7f);
+        v->lfo_shape = (int)(rand_float(&inst->rng) * 4.0f) % 4; /* 0=sine,1=tri,2=saw,3=sq */
 
         /* SVF state */
         v->svf_lp = v->svf_bp = v->svf_hp = 0.0f;
@@ -228,8 +245,9 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
             inst->current_voice = idx;
             inst->voices[idx].active = !inst->voices[idx].active;
             if (inst->voices[idx].active) {
-                /* Retrigger envelope on activation */
-                inst->voices[idx].env = 1.0f;
+                /* Start onset ramp (don't reset to avoid click) */
+                if (inst->voices[idx].env < 0.01f)
+                    inst->voices[idx].env = 0.01f;
             }
         }
     }
@@ -338,12 +356,12 @@ static void set_param(void *instance, const char *key, const char *val) {
         }
         for (int i = 0; i < N_VOICES; i++) {
             float sp, mo, dc, tb, fq, ns, co, vo;
-            int svf_m;
+            int svf_m, lfo_s;
             float svf_r, pn;
             consumed = 0;
-            if (sscanf(p, " %f %f %f %f %f %f %f %f %d %f %f%n",
+            if (sscanf(p, " %f %f %f %f %f %f %f %f %d %f %f %d%n",
                        &sp, &mo, &dc, &tb, &fq, &ns, &co, &vo,
-                       &svf_m, &svf_r, &pn, &consumed) == 11) {
+                       &svf_m, &svf_r, &pn, &lfo_s, &consumed) == 12) {
                 inst->voices[i].speed     = sp;
                 inst->voices[i].mod       = mo;
                 inst->voices[i].decay     = dc;
@@ -355,6 +373,7 @@ static void set_param(void *instance, const char *key, const char *val) {
                 inst->voices[i].svf_mode  = svf_m;
                 inst->voices[i].svf_q     = svf_r;
                 inst->voices[i].pan       = pn;
+                inst->voices[i].lfo_shape = lfo_s;
                 p += consumed;
             }
         }
@@ -475,10 +494,10 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
         for (int i = 0; i < N_VOICES && pos < buf_len - 1; i++) {
             voice_t *vi = &inst->voices[i];
             pos += snprintf(buf + pos, buf_len - pos,
-                " %f %f %f %f %f %f %f %f %d %f %f",
+                " %f %f %f %f %f %f %f %f %d %f %f %d",
                 vi->speed, vi->mod, vi->decay, vi->timbre,
                 vi->frequency, vi->noisiness, vi->cutoff, vi->volume,
-                vi->svf_mode, vi->svf_q, vi->pan);
+                vi->svf_mode, vi->svf_q, vi->pan, vi->lfo_shape);
         }
         return pos;
     }
@@ -499,31 +518,28 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
             voice_t *v = &inst->voices[vi];
             if (!v->active && v->env < 0.001f) continue;
 
-            /* ── Retrigger clock ── */
-            float clock_inc = v->speed / SAMPLE_RATE;
-            v->clock_phase += clock_inc;
-            if (v->clock_phase >= 1.0f) {
-                v->clock_phase -= 1.0f;
-                if (v->active) {
-                    v->env = 1.0f; /* retrigger envelope */
-                }
-            }
+            /* ── Volume LFO (rhythmic character) ── */
+            v->lfo_phase += v->speed / SAMPLE_RATE;
+            if (v->lfo_phase >= 1.0f) v->lfo_phase -= 1.0f;
+            float lfo_val = lfo_shape(v->lfo_phase, v->lfo_shape);
 
-            /* ── Decay envelope (exponential) ── */
-            if (v->env > 0.0001f) {
+            /* ── Onset/release envelope (exponential) ── */
+            if (v->active) {
+                /* Attack: fast rise to 1.0 */
+                v->env += (1.05f - v->env) * 0.05f;
+            } else {
+                /* Release: exponential decay out */
                 float decay_rate = 1.0f / (v->decay * SAMPLE_RATE + 1.0f);
                 v->env *= (1.0f - decay_rate);
-            } else {
-                v->env = 0.0f;
-                continue; /* skip silent voices */
+                if (v->env < 0.0001f) { v->env = 0.0f; continue; }
             }
 
             /* ── Frequency (quantized to scale) ── */
             float semitones = v->frequency * 48.0f; /* 0–1 → 0–48 semitones */
             float base_freq = quantize_to_scale(semitones, inst->root_note + 48, inst->scale);
 
-            /* Envelope → FM (mod param) */
-            float fm = 1.0f + v->env * v->mod * 2.0f;
+            /* LFO → FM (mod param) */
+            float fm = 1.0f + lfo_val * v->mod * 2.0f;
             float freq = base_freq * fm;
 
             /* ── Oscillator ── */
@@ -556,8 +572,8 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
                 default: filtered = v->svf_lp; break;
             }
 
-            /* ── Apply envelope + volume ── */
-            float out = filtered * v->env * v->volume;
+            /* ── Apply LFO × envelope × volume ── */
+            float out = filtered * lfo_val * v->env * v->volume;
 
             /* ── Stereo pan (constant power) ── */
             float pan01 = (v->pan + 1.0f) * 0.5f;
