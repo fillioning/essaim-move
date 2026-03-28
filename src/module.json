@@ -1,0 +1,41 @@
+{
+  "id": "essaim",
+  "name": "Essaim",
+  "version": "0.1.0",
+  "api_version": 2,
+  "description": "32-voice rhythmic oscillator swarm",
+  "author": "fillioning",
+  "abbrev": "ESSM",
+  "dsp": "dsp.so",
+  "component_type": "sound_generator",
+  "raw_midi": true,
+  "capabilities": {
+    "audio_out": true,
+    "midi_in": true,
+    "chainable": true,
+    "component_type": "sound_generator",
+    "ui_hierarchy": {
+      "modes": null,
+      "levels": {
+        "root": {
+          "name": "Essaim",
+          "knobs": [],
+          "params": [
+            {"level": "Global", "label": "Global"},
+            {"level": "Voice", "label": "Voice"}
+          ]
+        },
+        "Global": {
+          "name": "Global",
+          "knobs": ["root_note", "scale"],
+          "params": ["root_note", "scale"]
+        },
+        "Voice": {
+          "name": "Voice",
+          "knobs": ["speed", "mod", "decay", "timbre", "frequency", "noisiness", "cutoff", "volume"],
+          "params": ["speed", "mod", "decay", "timbre", "frequency", "noisiness", "cutoff", "volume"]
+        }
+      }
+    }
+  }
+}
