@@ -261,7 +261,14 @@ static void randomize_voice(essaim_t *inst, int idx) {
     v->attack = rand_range(&inst->rng, 0.001f, 0.05f);
     v->octave = 0;
     v->noisiness = rand_range(&inst->rng, 0.0f, 0.3f);
-    v->cutoff = rand_range(&inst->rng, 0.5f, 0.95f);
+
+    /* Cutoff: if frequency > 70%, cap cutoff at 80% */
+    if (v->frequency > 0.7f) {
+        v->cutoff = rand_range(&inst->rng, 0.5f, 0.8f);
+    } else {
+        v->cutoff = rand_range(&inst->rng, 0.5f, 0.95f);
+    }
+
     v->volume = rand_range(&inst->rng, 0.3f, 0.9f);
     float r = rand_float(&inst->rng);
     v->svf_mode = r < 0.5f ? 0 : (r < 0.8f ? 1 : 2);
@@ -269,7 +276,12 @@ static void randomize_voice(essaim_t *inst, int idx) {
     v->lfo_shape = (int)(rand_float(&inst->rng) * N_LFO_SHAPES) % N_LFO_SHAPES;
     v->mod_lfo_rate = rand_range(&inst->rng, 0.05f, 0.3f);
     v->mod_lfo_phase = rand_float(&inst->rng);
-    v->mod_dest = (int)(rand_float(&inst->rng) * 3) % 3;  /* 0=Volume, 1=Vol+Filt, 2=Filter */
+
+    /* Mod Dest: 50% Volume, 30% Vol+Filt, 20% Filter */
+    float roll = rand_float(&inst->rng);
+    if (roll < 0.5f) v->mod_dest = 0;           /* 50% Volume */
+    else if (roll < 0.8f) v->mod_dest = 1;      /* 30% Vol+Filt */
+    else v->mod_dest = 2;                       /* 20% Filter */
 }
 
 static void randomize_patch(essaim_t *inst) {
@@ -372,7 +384,9 @@ static void apply_preset(essaim_t *inst, int idx) {
         v->timbre    = rand_range(&inst->rng, p->tmb_lo, p->tmb_hi);
         v->frequency = rand_range(&inst->rng, p->frq_lo, p->frq_hi);
         v->noisiness = rand_range(&inst->rng, p->noi_lo, p->noi_hi);
-        v->cutoff    = rand_range(&inst->rng, p->cut_lo, p->cut_hi);
+        /* If frequency > 70%, cap cutoff at 80% */
+        float cut_hi = (v->frequency > 0.7f) ? fminf(p->cut_hi, 0.8f) : p->cut_hi;
+        v->cutoff    = rand_range(&inst->rng, p->cut_lo, cut_hi);
         v->volume    = rand_range(&inst->rng, p->vol_lo, p->vol_hi);
         float r = rand_float(&inst->rng);
         v->svf_mode  = r < 0.5f ? 0 : (r < 0.8f ? 1 : 2);
@@ -381,7 +395,11 @@ static void apply_preset(essaim_t *inst, int idx) {
         v->pan       = rand_range(&inst->rng, -0.7f, 0.7f);
         v->mod_lfo_rate  = rand_range(&inst->rng, 0.05f, 0.3f);
         v->mod_lfo_phase = rand_float(&inst->rng);
-        v->mod_dest  = (int)(rand_float(&inst->rng) * (p->mod_dest_hi - p->mod_dest_lo + 1)) + p->mod_dest_lo;
+        /* Mod Dest: 50% Volume, 30% Vol+Filt, 20% Filter */
+        float roll = rand_float(&inst->rng);
+        if (roll < 0.5f) v->mod_dest = 0;       /* 50% Volume */
+        else if (roll < 0.8f) v->mod_dest = 1;  /* 30% Vol+Filt */
+        else v->mod_dest = 2;                   /* 20% Filter */
     }
     inst->freq_backup_valid = 0;
 }
