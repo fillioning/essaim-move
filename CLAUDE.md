@@ -12,8 +12,9 @@ Voice architecture: 32-voice, one per pad (notes 36–67), toggle on/off, self-t
 - `scripts/install.sh` — deploys to Move via scp + fixes ownership
 - `.github/workflows/release.yml` — CI: verifies version, builds, releases, updates release.json
 
-## Parameter pages (2 pages, jog-wheel navigation)
-- **Global**: Root Note (enum C–B), Scale (enum Chromatic/Major/Minor/Pentatonic/Whole Tone/Harm Minor)
+## Parameter pages (3 pages, jog-wheel navigation)
+- **Global**: Scale, Root, Rnd Patch, Rnd Voice, SameFreq, SameSpeed, InitFreq, Rnd Pan (+All Mono)
+- **FX**: Transpose, Fine (±1oct continuous), Saturation, Filter, Dly Mix, Dly Rate, Dly Feed, Dly Tone (+Dly Mode menu-only)
 - **Voice** (dynamic — reflects most-recently-pressed pad):
   Speed (retrigger Hz), Mod (env→FM), Decay (envelope), Timbre (shape morph),
   Frequency (pitch, quantized), Noisiness (noise blend), Cutoff (SVF), Volume

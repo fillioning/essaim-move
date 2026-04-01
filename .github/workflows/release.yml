@@ -1,5 +1,8 @@
 name: Release
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -38,6 +41,9 @@ jobs:
           echo "{\"version\": \"$VERSION\", \"download_url\": \"$URL\"}" > release.json
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
+          git fetch origin "$BRANCH"
+          git checkout -f "$BRANCH"
           git add release.json
           git commit -m "chore: update release.json for v$VERSION [skip ci]"
-          git push origin main
+          git push origin "$BRANCH"
