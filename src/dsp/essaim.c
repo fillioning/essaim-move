@@ -443,19 +443,20 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
     if (len < 3) return;
     uint8_t status = msg[0] & 0xF0, note = msg[1], vel = msg[2];
 
-    /* Track min/max notes to anchor the 32-pad range.
-       If span exceeds 32, assume layout changed and reset. */
-    if (note < inst->pad_lowest_note) {
-        inst->pad_lowest_note = note;
-    }
-    if (note > inst->pad_highest_note) {
-        inst->pad_highest_note = note;
-    }
+    /* Only track min/max on note-on to prevent note-off from changing anchor */
+    if (status == 0x90 && vel > 0) {
+        if (note < inst->pad_lowest_note) {
+            inst->pad_lowest_note = note;
+        }
+        if (note > inst->pad_highest_note) {
+            inst->pad_highest_note = note;
+        }
 
-    /* Detect layout change: if span >= 32, reset anchor to current note */
-    if (inst->pad_highest_note - inst->pad_lowest_note >= 32) {
-        inst->pad_lowest_note = note;
-        inst->pad_highest_note = note;
+        /* Detect layout change: if span >= 32, reset anchor to current note */
+        if (inst->pad_highest_note - inst->pad_lowest_note >= 32) {
+            inst->pad_lowest_note = note;
+            inst->pad_highest_note = note;
+        }
     }
 
     /* Map MIDI note to voice 0-31 relative to lowest pad in current layout */
@@ -643,6 +644,11 @@ static void set_param(void *instance, const char *key, const char *val) {
         for (int n=0;n<6;n++) if (strcmp(val,OCT_NAMES[n])==0) { v->octave=n-3; return; }
         v->octave=(int)clampf(f,-3,2); return;
     }
+    if (strcmp(key,"v_lfo_shape")==0) {
+        static const char *SHAPE_NAMES[6] = {"Sine","Triangle","Soft Saw","Soft Square","Skewed Sine","Warm Pulse"};
+        for (int n=0;n<N_LFO_SHAPES;n++) if (strcmp(val,SHAPE_NAMES[n])==0) { v->lfo_shape=n; return; }
+        v->lfo_shape=(int)clampf(f,0,N_LFO_SHAPES-1); return;
+    }
 
     if (strcmp(key, "state") == 0) {
         const char *p = val;
@@ -691,7 +697,7 @@ static const char UI_HIERARCHY_JSON[] =
     "},"
     "\"Voice\":{\"name\":\"Voice\","
       "\"knobs\":[\"speed\",\"mod\",\"decay\",\"timbre\",\"frequency\",\"noisiness\",\"cutoff\",\"volume\"],"
-      "\"params\":[\"speed\",\"mod\",\"decay\",\"timbre\",\"frequency\",\"noisiness\",\"cutoff\",\"volume\",\"v_attack\",\"v_pan\",\"v_octave\"]"
+      "\"params\":[\"speed\",\"mod\",\"decay\",\"timbre\",\"frequency\",\"noisiness\",\"cutoff\",\"volume\",\"v_attack\",\"v_pan\",\"v_octave\",\"v_lfo_shape\"]"
     "}"
     "}}";
 
@@ -735,7 +741,9 @@ static const char CHAIN_PARAMS_JSON[] =
     "{\"key\":\"v_attack\",\"name\":\"Attack\",\"type\":\"float\",\"min\":0.001,\"max\":1.0,\"step\":0.001},"
     "{\"key\":\"v_pan\",\"name\":\"Pan\",\"type\":\"float\",\"min\":-1,\"max\":1,\"step\":0.01},"
     "{\"key\":\"v_octave\",\"name\":\"Octave\",\"type\":\"enum\","
-      "\"options\":[\"-3\",\"-2\",\"-1\",\"0\",\"+1\",\"+2\"]}"
+      "\"options\":[\"-3\",\"-2\",\"-1\",\"0\",\"+1\",\"+2\"]},"
+    "{\"key\":\"v_lfo_shape\",\"name\":\"LFO Shape\",\"type\":\"enum\","
+      "\"options\":[\"Sine\",\"Triangle\",\"Soft Saw\",\"Soft Square\",\"Skewed Sine\",\"Warm Pulse\"]}"
     "]";
 
 static int get_param(void *instance, const char *key, char *buf, int buf_len) {
@@ -843,6 +851,10 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     if (strcmp(key,"v_octave")==0) {
         static const char *OCT_NAMES[6] = {"-3","-2","-1","0","+1","+2"};
         return snprintf(buf,buf_len,"%s",OCT_NAMES[v->octave+3]);
+    }
+    if (strcmp(key,"v_lfo_shape")==0) {
+        static const char *SHAPE_NAMES[6] = {"Sine","Triangle","Soft Saw","Soft Square","Skewed Sine","Warm Pulse"};
+        return snprintf(buf,buf_len,"%s",SHAPE_NAMES[v->lfo_shape]);
     }
 
     if (strcmp(key,"state")==0) {
