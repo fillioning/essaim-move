@@ -174,6 +174,7 @@ typedef struct {
     biquad_t dj_lpf_r[3], dj_hpf_r[3];
 
     uint32_t rng;
+    int      pad_lowest_note;  /* anchor for 32-pad range, adapts to layout */
 } essaim_t;
 
 /* ── RNG ───────────────────────────────────────────────────────────────────── */
@@ -401,6 +402,7 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     inst->filter_smooth = 0.5f;
     inst->dly_rate_smooth = 0.5f;
     inst->current_voice = 0; inst->current_page = 1;
+    inst->pad_lowest_note = 128;  /* unset; first pad press anchors the range */
 
     /* Init per-voice DSP state (phases, filters, envelopes) */
     for (int i = 0; i < N_VOICES; i++) {
@@ -438,9 +440,18 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
     essaim_t *inst = (essaim_t *)instance;
     if (len < 3) return;
     uint8_t status = msg[0] & 0xF0, note = msg[1], vel = msg[2];
-    /* Accept any MIDI note and map to voices 0-31 via modulo,
-       so all 32 pads work regardless of Move pad layout */
-    int idx = note % N_VOICES;
+
+    /* Track lowest note seen for pad layout anchoring.
+       When layout changes, the first note pressed resets the anchor. */
+    if ((status == 0x90 && vel > 0) && note < inst->pad_lowest_note) {
+        inst->pad_lowest_note = note;
+    }
+
+    /* Map MIDI note to voice 0-31 relative to lowest pad in current layout */
+    int base = (inst->pad_lowest_note == 128) ? 0 : inst->pad_lowest_note;
+    int idx = (note - base) % N_VOICES;
+    if (idx < 0) idx += N_VOICES;  /* ensure positive modulo */
+
     inst->current_voice = idx;
     if (status == 0x90 && vel > 0) {
         inst->voices[idx].active = 1;
@@ -450,7 +461,8 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
         inst->voices[idx].active = 0;
     } else if (status == 0xA0) {
         /* Polyphonic aftertouch — pad pressure → speed: 0=1x, 127=2x */
-        int aidx = note % N_VOICES;
+        int aidx = (note - base) % N_VOICES;
+        if (aidx < 0) aidx += N_VOICES;
         inst->voices[aidx].vel_speed_mult = 1.0f + (float)vel / 127.0f;
     } else if (status == 0xD0) {
         /* Channel aftertouch — affects current voice */
