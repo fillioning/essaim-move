@@ -174,7 +174,8 @@ typedef struct {
     biquad_t dj_lpf_r[3], dj_hpf_r[3];
 
     uint32_t rng;
-    int      pad_lowest_note;  /* anchor for 32-pad range, adapts to layout */
+    int      pad_lowest_note;   /* lowest MIDI note seen in current layout */
+    int      pad_highest_note;  /* highest MIDI note seen in current layout */
 } essaim_t;
 
 /* ── RNG ───────────────────────────────────────────────────────────────────── */
@@ -402,7 +403,8 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     inst->filter_smooth = 0.5f;
     inst->dly_rate_smooth = 0.5f;
     inst->current_voice = 0; inst->current_page = 1;
-    inst->pad_lowest_note = 128;  /* unset; first pad press anchors the range */
+    inst->pad_lowest_note = 128;   /* unset; will be updated on first note */
+    inst->pad_highest_note = -1;   /* unset */
 
     /* Init per-voice DSP state (phases, filters, envelopes) */
     for (int i = 0; i < N_VOICES; i++) {
@@ -441,14 +443,23 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
     if (len < 3) return;
     uint8_t status = msg[0] & 0xF0, note = msg[1], vel = msg[2];
 
-    /* Track lowest note seen for pad layout anchoring.
-       When layout changes, the first note pressed resets the anchor. */
-    if ((status == 0x90 && vel > 0) && note < inst->pad_lowest_note) {
+    /* Track min/max notes to anchor the 32-pad range.
+       If span exceeds 32, assume layout changed and reset. */
+    if (note < inst->pad_lowest_note) {
         inst->pad_lowest_note = note;
+    }
+    if (note > inst->pad_highest_note) {
+        inst->pad_highest_note = note;
+    }
+
+    /* Detect layout change: if span >= 32, reset anchor to current note */
+    if (inst->pad_highest_note - inst->pad_lowest_note >= 32) {
+        inst->pad_lowest_note = note;
+        inst->pad_highest_note = note;
     }
 
     /* Map MIDI note to voice 0-31 relative to lowest pad in current layout */
-    int base = (inst->pad_lowest_note == 128) ? 0 : inst->pad_lowest_note;
+    int base = inst->pad_lowest_note;
     int idx = (note - base) % N_VOICES;
     if (idx < 0) idx += N_VOICES;  /* ensure positive modulo */
 
