@@ -139,6 +139,7 @@ typedef struct {
     float mod_lfo_phase;   /* slow modulation LFO for speed drift */
     float mod_lfo_rate;    /* Hz, randomized per voice at init */
     float vel_speed_mult;  /* velocity → speed multiplier (1.0–2.0) */
+    int   mod_dest;        /* 0=Volume, 1=Vol+Filt, 2=Filter */
 } voice_t;
 
 /* ── Instance state ────────────────────────────────────────────────────────── */
@@ -259,7 +260,7 @@ static void randomize_voice(essaim_t *inst, int idx) {
     v->attack = rand_range(&inst->rng, 0.001f, 0.05f);
     v->octave = 0;
     v->noisiness = rand_range(&inst->rng, 0.0f, 0.3f);
-    v->cutoff = rand_range(&inst->rng, 0.3f, 0.95f);
+    v->cutoff = rand_range(&inst->rng, 0.5f, 0.95f);
     v->volume = rand_range(&inst->rng, 0.3f, 0.9f);
     float r = rand_float(&inst->rng);
     v->svf_mode = r < 0.5f ? 0 : (r < 0.8f ? 1 : 2);
@@ -267,6 +268,7 @@ static void randomize_voice(essaim_t *inst, int idx) {
     v->lfo_shape = (int)(rand_float(&inst->rng) * N_LFO_SHAPES) % N_LFO_SHAPES;
     v->mod_lfo_rate = rand_range(&inst->rng, 0.05f, 0.3f);
     v->mod_lfo_phase = rand_float(&inst->rng);
+    v->mod_dest = (int)(rand_float(&inst->rng) * 3) % 3;  /* 0=Volume, 1=Vol+Filt, 2=Filter */
 }
 
 static void randomize_patch(essaim_t *inst) {
@@ -296,34 +298,35 @@ typedef struct {
     float spd_lo, spd_hi, mod_lo, mod_hi, dec_lo, dec_hi;
     float tmb_lo, tmb_hi, frq_lo, frq_hi, noi_lo, noi_hi;
     float cut_lo, cut_hi, vol_lo, vol_hi;
+    int   mod_dest_lo, mod_dest_hi;  /* 0=Volume, 1=Vol+Filt, 2=Filter */
 } preset_t;
 
 static const preset_t PRESETS[N_PRESETS] = {
-    /* 0  Init (random) */ {"Init",        0, 0, 4,0,   0,   0.5, 0,0,0,0.5,2,             0,0,  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0},
-    /* 1  Swarm       */ {"Swarm",       2,11, 4,0,   0,   0.5, 0.3,0.5,0.25,0.7,1,   1,15,  0.4,0.6, 0.02,1.0, 0.0,1.0, 0.0,1.0, 0.0,0.3, 0.3,0.95, 0.3,0.9},
-    /* 1  Drift       */ {"Drift",       4, 0, 4,0,   0,   0.5, 0.4,0.8,0.4,0.5,1,    0.2,2.0, 0.6,0.9, 0.3,1.5, 0.0,0.3, 0.1,0.9, 0.0,0.1, 0.5,0.9, 0.3,0.7},
-    /* 2  Pulse       */ {"Pulse",       1, 0, 4,0,   0,   0.5, 0.2,0.3,0.3,0.5,1,    4,20,  0.3,0.5, 0.01,0.15,0.7,1.0, 0.2,0.8, 0.0,0.05,0.6,0.95, 0.4,0.8},
-    /* 3  Fog         */ {"Fog",         2, 7, 3,0,   0,   0.35,0.5,1.2,0.5,0.3,1,    0.1,0.8, 0.4,0.6, 0.5,2.0, 0.0,0.2, 0.1,0.5, 0.0,0.15,0.2,0.5, 0.2,0.6},
-    /* 4  Hive        */ {"Hive",        3, 2, 6,0,   0.1, 0.5, 0.15,0.2,0.2,0.6,1,   5,30,  0.3,0.7, 0.01,0.3, 0.3,1.0, 0.6,1.0, 0.1,0.5, 0.5,0.95, 0.3,0.7},
-    /* 5  Crystal     */ {"Crystal",     1, 4, 7,0,   0,   0.5, 0.3,0.4,0.3,0.7,2,    0.5,4, 0.3,0.5, 0.2,1.0, 0.0,0.15,0.7,1.0, 0.0,0.05,0.7,0.98, 0.3,0.6},
-    /* 6  Rumble      */ {"Rumble",      0, 0, 2,0,   0.3, 0.5, 0.0,0.0,0.0,0.5,0,    3,18,  0.4,0.6, 0.02,0.3, 0.5,0.9, 0.0,0.25,0.0,0.1, 0.3,0.6, 0.5,0.9},
-    /* 7  Scatter     */ {"Scatter",     0, 0, 4,0,   0,   0.5, 0.25,0.15,0.35,0.6,2,  0.3,35, 0.3,0.7, 0.01,0.5, 0.0,1.0, 0.0,1.0, 0.0,0.2, 0.3,0.95, 0.2,0.8},
-    /* 8  Choir       */ {"Choir",       5, 9, 4,0,   0,   0.5, 0.35,0.6,0.4,0.5,1,   0.5,3, 0.5,0.8, 0.3,1.5, 0.0,0.1, 0.3,0.7, 0.0,0.05,0.4,0.7, 0.3,0.7},
-    /* 9  Glitch      */ {"Glitch",      0, 0, 4,0,   0.15,0.5, 0.2,0.1,0.3,0.8,2,    8,40,  0.3,0.7, 0.005,0.05,0.5,1.0, 0.0,1.0, 0.1,0.5, 0.4,0.95, 0.3,0.8},
-    /* 10 Tide        */ {"Tide",        2, 7, 4,0,   0,   0.5, 0.5,1.0,0.45,0.4,1,   0.2,1.5, 0.4,0.6, 0.5,2.0, 0.0,0.2, 0.2,0.7, 0.0,0.1, 0.4,0.8, 0.3,0.7},
-    /* 11 Spark       */ {"Spark",       3, 2, 6,0,   0.05,0.5, 0.35,0.08,0.5,0.8,2,  6,25,  0.3,0.5, 0.005,0.08,0.6,1.0, 0.4,1.0, 0.0,0.1, 0.7,0.98, 0.4,0.8},
-    /* 12 Forest      */ {"Forest",      3, 4, 4,0,   0,   0.5, 0.2,0.4,0.3,0.5,1,    0.8,6, 0.4,0.6, 0.1,0.8, 0.1,0.5, 0.2,0.6, 0.05,0.2,0.4,0.8, 0.3,0.7},
-    /* 13 Metal       */ {"Metal",       0, 0, 4,0,   0.4, 0.5, 0.0,0.0,0.0,0.5,0,    3,20,  0.3,0.7, 0.01,0.2, 0.6,1.0, 0.1,0.8, 0.0,0.15,0.6,0.98, 0.4,0.9},
-    /* 14 Breath      */ {"Breath",      3, 9, 4,0,   0,   0.4, 0.3,0.7,0.35,0.4,1,   0.3,2, 0.4,0.6, 0.2,1.2, 0.0,0.1, 0.1,0.5, 0.4,0.9, 0.3,0.6, 0.2,0.6},
-    /* 15 Clockwork   */ {"Clockwork",   1, 0, 4,0,   0,   0.5, 0.15,0.25,0.2,0.6,0,  4,4.1, 0.45,0.55,0.02,0.1, 0.3,0.7, 0.2,0.8, 0.0,0.05,0.5,0.9, 0.5,0.8},
-    /* 16 Aurora      */ {"Aurora",      4, 4, 4,0,   0,   0.5, 0.45,1.5,0.4,0.5,1,   0.15,1.0,0.6,0.9,0.5,2.0, 0.0,0.15,0.2,0.9, 0.0,0.05,0.5,0.9, 0.2,0.6},
-    /* 17 Dust        */ {"Dust",        0, 0, 4,0,   0,   0.5, 0.1,0.05,0.2,0.7,2,   0.5,8, 0.3,0.5, 0.005,0.03,0.3,0.8, 0.0,1.0, 0.05,0.3,0.4,0.9, 0.1,0.35},
-    /* 18 Thunder     */ {"Thunder",     2, 0, 1,0,   0.5, 0.5, 0.0,0.0,0.0,0.5,0,    5,25,  0.4,0.7, 0.05,0.4, 0.6,1.0, 0.0,0.15,0.0,0.2, 0.2,0.5, 0.5,0.9},
-    /* 19 Bells       */ {"Bells",       1, 4, 7,0,   0,   0.5, 0.25,0.5,0.3,0.6,1,   0.3,3, 0.3,0.5, 0.3,1.5, 0.0,0.05,0.5,1.0, 0.0,0.02,0.6,0.98, 0.3,0.7},
-    /* 20 Swamp       */ {"Swamp",       2, 3, 2,0,   0.2, 0.4, 0.3,0.8,0.4,0.3,1,   0.3,3, 0.5,0.8, 0.2,1.0, 0.3,0.7, 0.0,0.3, 0.15,0.5,0.2,0.5, 0.3,0.7},
-    /* 21 Firefly     */ {"Firefly",     3, 9, 6,0,   0,   0.5, 0.2,0.12,0.3,0.7,2,   3,20,  0.3,0.5, 0.005,0.06,0.2,0.6, 0.5,1.0, 0.0,0.05,0.6,0.95, 0.2,0.5},
-    /* 22 Cascade     */ {"Cascade",     1, 7, 4,0,   0,   0.5, 0.5,0.3,0.6,0.6,2,    2,12,  0.4,0.6, 0.05,0.5, 0.2,0.7, 0.0,0.8, 0.0,0.1, 0.4,0.9, 0.3,0.8},
-    /* 23 Zen         */ {"Zen",         3, 0, 4,0,   0,   0.5, 0.2,0.9,0.2,0.5,1,    0.3,2, 0.45,0.55,0.4,1.5, 0.0,0.1, 0.3,0.7, 0.0,0.02,0.5,0.85, 0.3,0.6},
+    /* 0  Init (random) */ {"Init",        0, 0, 4,0,   0,   0.5, 0,0,0,0.5,2,             0,0,  0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0.5,1.0, 0,2},
+    /* 1  Swarm       */ {"Swarm",       2,11, 4,0,   0,   0.5, 0.3,0.5,0.25,0.7,1,   1,15,  0.4,0.6, 0.02,1.0, 0.0,1.0, 0.0,1.0, 0.0,0.3, 0.5,0.95, 0.3,0.9, 0,2},
+    /* 1  Drift       */ {"Drift",       4, 0, 4,0,   0,   0.5, 0.4,0.8,0.4,0.5,1,    0.2,2.0, 0.6,0.9, 0.3,1.5, 0.0,0.3, 0.1,0.9, 0.0,0.1, 0.5,0.9, 0.3,0.7, 0,2},
+    /* 2  Pulse       */ {"Pulse",       1, 0, 4,0,   0,   0.5, 0.2,0.3,0.3,0.5,1,    4,20,  0.3,0.5, 0.01,0.15,0.7,1.0, 0.2,0.8, 0.0,0.05, 0.5,0.95, 0.4,0.8, 0,2},
+    /* 3  Fog         */ {"Fog",         2, 7, 3,0,   0,   0.35,0.5,1.2,0.5,0.3,1,    0.1,0.8, 0.4,0.6, 0.5,2.0, 0.0,0.2, 0.1,0.5, 0.0,0.15, 0.5,0.8, 0.2,0.6, 0,2},
+    /* 4  Hive        */ {"Hive",        3, 2, 6,0,   0.1, 0.5, 0.15,0.2,0.2,0.6,1,   5,30,  0.3,0.7, 0.01,0.3, 0.3,1.0, 0.6,1.0, 0.1,0.5, 0.5,0.95, 0.3,0.7, 0,2},
+    /* 5  Crystal     */ {"Crystal",     1, 4, 7,0,   0,   0.5, 0.3,0.4,0.3,0.7,2,    0.5,4, 0.3,0.5, 0.2,1.0, 0.0,0.15,0.7,1.0, 0.0,0.05, 0.5,0.98, 0.3,0.6, 0,2},
+    /* 6  Rumble      */ {"Rumble",      0, 0, 2,0,   0.3, 0.5, 0.0,0.0,0.0,0.5,0,    3,18,  0.4,0.6, 0.02,0.3, 0.5,0.9, 0.0,0.25,0.0,0.1, 0.5,0.8, 0.5,0.9, 0,2},
+    /* 7  Scatter     */ {"Scatter",     0, 0, 4,0,   0,   0.5, 0.25,0.15,0.35,0.6,2,  0.3,35, 0.3,0.7, 0.01,0.5, 0.0,1.0, 0.0,1.0, 0.0,0.2, 0.5,0.95, 0.2,0.8, 0,2},
+    /* 8  Choir       */ {"Choir",       5, 9, 4,0,   0,   0.5, 0.35,0.6,0.4,0.5,1,   0.5,3, 0.5,0.8, 0.3,1.5, 0.0,0.1, 0.3,0.7, 0.0,0.05, 0.5,0.8, 0.3,0.7, 0,2},
+    /* 9  Glitch      */ {"Glitch",      0, 0, 4,0,   0.15,0.5, 0.2,0.1,0.3,0.8,2,    8,40,  0.3,0.7, 0.005,0.05,0.5,1.0, 0.0,1.0, 0.1,0.5, 0.5,0.95, 0.3,0.8, 0,2},
+    /* 10 Tide        */ {"Tide",        2, 7, 4,0,   0,   0.5, 0.5,1.0,0.45,0.4,1,   0.2,1.5, 0.4,0.6, 0.5,2.0, 0.0,0.2, 0.2,0.7, 0.0,0.1, 0.5,0.8, 0.3,0.7, 0,2},
+    /* 11 Spark       */ {"Spark",       3, 2, 6,0,   0.05,0.5, 0.35,0.08,0.5,0.8,2,  6,25,  0.3,0.5, 0.005,0.08,0.6,1.0, 0.4,1.0, 0.0,0.1, 0.7,0.98, 0.4,0.8, 0,2},
+    /* 12 Forest      */ {"Forest",      3, 4, 4,0,   0,   0.5, 0.2,0.4,0.3,0.5,1,    0.8,6, 0.4,0.6, 0.1,0.8, 0.1,0.5, 0.2,0.6, 0.05,0.2, 0.5,0.8, 0.3,0.7, 0,2},
+    /* 13 Metal       */ {"Metal",       0, 0, 4,0,   0.4, 0.5, 0.0,0.0,0.0,0.5,0,    3,20,  0.3,0.7, 0.01,0.2, 0.6,1.0, 0.1,0.8, 0.0,0.15, 0.5,0.98, 0.4,0.9, 0,2},
+    /* 14 Breath      */ {"Breath",      3, 9, 4,0,   0,   0.4, 0.3,0.7,0.35,0.4,1,   0.3,2, 0.4,0.6, 0.2,1.2, 0.0,0.1, 0.1,0.5, 0.4,0.9, 0.5,0.7, 0.2,0.6, 0,2},
+    /* 15 Clockwork   */ {"Clockwork",   1, 0, 4,0,   0,   0.5, 0.15,0.25,0.2,0.6,0,  4,4.1, 0.45,0.55,0.02,0.1, 0.3,0.7, 0.2,0.8, 0.0,0.05, 0.5,0.9, 0.5,0.8, 0,2},
+    /* 16 Aurora      */ {"Aurora",      4, 4, 4,0,   0,   0.5, 0.45,1.5,0.4,0.5,1,   0.15,1.0,0.6,0.9,0.5,2.0, 0.0,0.15,0.2,0.9, 0.0,0.05, 0.5,0.9, 0.2,0.6, 0,2},
+    /* 17 Dust        */ {"Dust",        0, 0, 4,0,   0,   0.5, 0.1,0.05,0.2,0.7,2,   0.5,8, 0.3,0.5, 0.005,0.03,0.3,0.8, 0.0,1.0, 0.05,0.3, 0.5,0.9, 0.1,0.35, 0,2},
+    /* 18 Thunder     */ {"Thunder",     2, 0, 1,0,   0.5, 0.5, 0.0,0.0,0.0,0.5,0,    5,25,  0.4,0.7, 0.05,0.4, 0.6,1.0, 0.0,0.15,0.0,0.2, 0.5,0.7, 0.5,0.9, 0,2},
+    /* 19 Bells       */ {"Bells",       1, 4, 7,0,   0,   0.5, 0.25,0.5,0.3,0.6,1,   0.3,3, 0.3,0.5, 0.3,1.5, 0.0,0.05,0.5,1.0, 0.0,0.02, 0.6,0.98, 0.3,0.7, 0,2},
+    /* 20 Swamp       */ {"Swamp",       2, 3, 2,0,   0.2, 0.4, 0.3,0.8,0.4,0.3,1,   0.3,3, 0.5,0.8, 0.2,1.0, 0.3,0.7, 0.0,0.3, 0.15,0.5, 0.5,0.7, 0.3,0.7, 0,2},
+    /* 21 Firefly     */ {"Firefly",     3, 9, 6,0,   0,   0.5, 0.2,0.12,0.3,0.7,2,   3,20,  0.3,0.5, 0.005,0.06,0.2,0.6, 0.5,1.0, 0.0,0.05, 0.6,0.95, 0.2,0.5, 0,2},
+    /* 22 Cascade     */ {"Cascade",     1, 7, 4,0,   0,   0.5, 0.5,0.3,0.6,0.6,2,    2,12,  0.4,0.6, 0.05,0.5, 0.2,0.7, 0.0,0.8, 0.0,0.1, 0.5,0.9, 0.3,0.8, 0,2},
+    /* 23 Zen         */ {"Zen",         3, 0, 4,0,   0,   0.5, 0.2,0.9,0.2,0.5,1,    0.3,2, 0.45,0.55,0.4,1.5, 0.0,0.1, 0.3,0.7, 0.0,0.02, 0.5,0.85, 0.3,0.6, 0,2},
 };
 
 static void apply_preset(essaim_t *inst, int idx) {
@@ -377,6 +380,7 @@ static void apply_preset(essaim_t *inst, int idx) {
         v->pan       = rand_range(&inst->rng, -0.7f, 0.7f);
         v->mod_lfo_rate  = rand_range(&inst->rng, 0.05f, 0.3f);
         v->mod_lfo_phase = rand_float(&inst->rng);
+        v->mod_dest  = (int)(rand_float(&inst->rng) * (p->mod_dest_hi - p->mod_dest_lo + 1)) + p->mod_dest_lo;
     }
     inst->freq_backup_valid = 0;
 }
@@ -638,6 +642,11 @@ static void set_param(void *instance, const char *key, const char *val) {
         for (int n=0;n<N_LFO_SHAPES;n++) if (strcmp(val,SHAPE_NAMES[n])==0) { v->lfo_shape=n; return; }
         v->lfo_shape=(int)clampf(f,0,N_LFO_SHAPES-1); return;
     }
+    if (strcmp(key,"v_mod_dest")==0) {
+        static const char *DEST_NAMES[3] = {"Volume","Vol+Filt","Filter"};
+        for (int n=0;n<3;n++) if (strcmp(val,DEST_NAMES[n])==0) { v->mod_dest=n; return; }
+        v->mod_dest=(int)clampf(f,0,2); return;
+    }
 
     if (strcmp(key, "state") == 0) {
         const char *p = val;
@@ -654,14 +663,14 @@ static void set_param(void *instance, const char *key, const char *val) {
             p += consumed;
         }
         for (int i=0; i<N_VOICES; i++) {
-            float sp,mo,dc,tb,fq,ns,co,vo; int svf_m,lfo_s; float svf_r,pn;
+            float sp,mo,dc,tb,fq,ns,co,vo; int svf_m,lfo_s,mod_d; float svf_r,pn;
             consumed=0;
-            if (sscanf(p," %f %f %f %f %f %f %f %f %d %f %f %d%n",
-                       &sp,&mo,&dc,&tb,&fq,&ns,&co,&vo,&svf_m,&svf_r,&pn,&lfo_s,&consumed)==12) {
+            if (sscanf(p," %f %f %f %f %f %f %f %f %d %f %f %d %d%n",
+                       &sp,&mo,&dc,&tb,&fq,&ns,&co,&vo,&svf_m,&svf_r,&pn,&lfo_s,&mod_d,&consumed)==13) {
                 voice_t *vi=&inst->voices[i];
                 vi->speed=sp; vi->mod=mo; vi->decay=dc; vi->timbre=tb;
                 vi->frequency=fq; vi->noisiness=ns; vi->cutoff=co; vi->volume=vo;
-                vi->svf_mode=svf_m; vi->svf_q=svf_r; vi->pan=pn; vi->lfo_shape=lfo_s;
+                vi->svf_mode=svf_m; vi->svf_q=svf_r; vi->pan=pn; vi->lfo_shape=lfo_s; vi->mod_dest=mod_d;
                 p += consumed;
             }
         }
@@ -686,7 +695,7 @@ static const char UI_HIERARCHY_JSON[] =
     "},"
     "\"Voice\":{\"name\":\"Voice\","
       "\"knobs\":[\"speed\",\"mod\",\"decay\",\"timbre\",\"frequency\",\"noisiness\",\"cutoff\",\"volume\"],"
-      "\"params\":[\"speed\",\"mod\",\"decay\",\"timbre\",\"frequency\",\"noisiness\",\"cutoff\",\"volume\",\"v_attack\",\"v_pan\",\"v_octave\",\"v_lfo_shape\"]"
+      "\"params\":[\"speed\",\"mod\",\"decay\",\"timbre\",\"frequency\",\"noisiness\",\"cutoff\",\"volume\",\"v_attack\",\"v_pan\",\"v_octave\",\"v_lfo_shape\",\"v_mod_dest\"]"
     "}"
     "}}";
 
@@ -732,7 +741,9 @@ static const char CHAIN_PARAMS_JSON[] =
     "{\"key\":\"v_octave\",\"name\":\"Octave\",\"type\":\"enum\","
       "\"options\":[\"-3\",\"-2\",\"-1\",\"0\",\"+1\",\"+2\"]},"
     "{\"key\":\"v_lfo_shape\",\"name\":\"LFO Shape\",\"type\":\"enum\","
-      "\"options\":[\"Sine\",\"Triangle\",\"Soft Saw\",\"Soft Square\",\"Skewed Sine\",\"Warm Pulse\"]}"
+      "\"options\":[\"Sine\",\"Triangle\",\"Soft Saw\",\"Soft Square\",\"Skewed Sine\",\"Warm Pulse\"]},"
+    "{\"key\":\"v_mod_dest\",\"name\":\"Mod Dest\",\"type\":\"enum\","
+      "\"options\":[\"Volume\",\"Vol+Filt\",\"Filter\"]}"
     "]";
 
 static int get_param(void *instance, const char *key, char *buf, int buf_len) {
@@ -845,6 +856,10 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
         static const char *SHAPE_NAMES[6] = {"Sine","Triangle","Soft Saw","Soft Square","Skewed Sine","Warm Pulse"};
         return snprintf(buf,buf_len,"%s",SHAPE_NAMES[v->lfo_shape]);
     }
+    if (strcmp(key,"v_mod_dest")==0) {
+        static const char *DEST_NAMES[3] = {"Volume","Vol+Filt","Filter"};
+        return snprintf(buf,buf_len,"%s",DEST_NAMES[v->mod_dest]);
+    }
 
     if (strcmp(key,"state")==0) {
         int pos=snprintf(buf,buf_len,"%d %d %d %f %f %f %f %f %f %d %d %f",
@@ -853,10 +868,10 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
             inst->dly_feedback,inst->dly_tone,inst->dly_mode,inst->all_mono,inst->fine);
         for (int i=0;i<N_VOICES&&pos<buf_len-1;i++) {
             voice_t *vi=&inst->voices[i];
-            pos+=snprintf(buf+pos,buf_len-pos," %f %f %f %f %f %f %f %f %d %f %f %d",
+            pos+=snprintf(buf+pos,buf_len-pos," %f %f %f %f %f %f %f %f %d %f %f %d %d",
                 vi->speed,vi->mod,vi->decay,vi->timbre,
                 vi->frequency,vi->noisiness,vi->cutoff,vi->volume,
-                vi->svf_mode,vi->svf_q,vi->pan,vi->lfo_shape);
+                vi->svf_mode,vi->svf_q,vi->pan,vi->lfo_shape,vi->mod_dest);
         }
         return pos;
     }
@@ -963,7 +978,7 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
             /* Main rhythmic LFO at modulated speed */
             v->lfo_phase += vc[vi].lfo_inc * speed_mult;
             if (v->lfo_phase >= 1.0f) v->lfo_phase -= 1.0f;
-            float lfo_val = lfo_shape(v->lfo_phase, v->lfo_shape);
+            float lfo_val = lfo_shape(v->lfo_phase, v->lfo_shape);  /* 0..1 */
 
             if (v->active) {
                 v->env += (1.05f - v->env) * vc[vi].attack_coeff;
@@ -978,9 +993,15 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
             float noise = (float)(int32_t)xorshift32(&inst->rng) / 2147483648.0f;
             float sig = osc * (1.0f - vc[vi].nm) + noise * vc[vi].nm;
 
+            /* Modulate cutoff if mod_dest includes filter (1=Vol+Filt, 2=Filter) */
+            float f_coeff_lfo = vc[vi].f_coeff;
+            if (v->mod_dest == 1 || v->mod_dest == 2) {
+                f_coeff_lfo *= (0.2f + 0.8f * lfo_val);  /* 0.2x to 1x of base cutoff */
+            }
+
             v->svf_hp = sig - v->svf_lp - vc[vi].q_fb * v->svf_bp;
-            v->svf_bp += vc[vi].f_coeff * v->svf_hp;
-            v->svf_lp += vc[vi].f_coeff * v->svf_bp;
+            v->svf_bp += f_coeff_lfo * v->svf_hp;
+            v->svf_lp += f_coeff_lfo * v->svf_bp;
             v->svf_bp = clampf(v->svf_bp, -4, 4);
             v->svf_lp = clampf(v->svf_lp, -4, 4);
 
@@ -990,7 +1011,9 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
                 case 2: filtered = v->svf_hp; break;
                 default: filtered = v->svf_lp; break;
             }
-            float out = filtered * lfo_val * v->env * v->volume_s;
+            /* Apply LFO to volume, cutoff, or both depending on mod_dest */
+            float vol_mod = (v->mod_dest == 2) ? 1.0f : lfo_val;  /* no vol mod if Filter only */
+            float out = filtered * vol_mod * v->env * v->volume_s;
             mix_l += out * vc[vi].pan_l;
             mix_r += out * vc[vi].pan_r;
         }
