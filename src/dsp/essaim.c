@@ -220,13 +220,14 @@ static inline float lfo_shape(float phase, int shape) {
             return 1.0f - 2.0f * fabsf(phase - 0.5f);
         case 2: /* Soft Saw — raised cosine (no discontinuity) */
             return 0.5f + 0.5f * cosf(phase * TWO_PI);
-        case 3: { /* Soft Square — trapezoid with 5% ramps */
+        case 3: { /* Soft Square — cosine-eased trapezoid, smooth ramps */
             float ramp = 0.05f;
-            if (phase < ramp) return phase / ramp;
+            float pi = 3.14159f;
+            if (phase < ramp) return 0.5f * (1.0f - cosf(pi * (phase / ramp)));  /* ease-in rise */
             if (phase < 0.5f - ramp) return 1.0f;
-            if (phase < 0.5f + ramp) return 1.0f - (phase - (0.5f - ramp)) / (2.0f * ramp);
+            if (phase < 0.5f + ramp) return 0.5f * (1.0f + cosf(pi * ((phase - (0.5f - ramp)) / (2.0f * ramp))));  /* ease-out fall */
             if (phase < 1.0f - ramp) return 0.0f;
-            return (phase - (1.0f - ramp)) / ramp;
+            return 0.5f * (1.0f - cosf(pi * ((phase - (1.0f - ramp)) / ramp)));  /* ease-in rise */
         }
         case 4: /* Skewed Sine — fast rise, slow fall */
             return sinf(phase * phase * TWO_PI * 0.5f) * (phase < 0.5f ? 1.0f : cosf((phase - 0.5f) * 3.14159f));
