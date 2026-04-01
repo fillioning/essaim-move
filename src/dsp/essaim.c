@@ -925,13 +925,13 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
         vc[vi].attack_coeff = 1.0f / (v->attack * SAMPLE_RATE + 1.0f);
     }
 
-    /* ── Saturation: smooth drive, gentler curve ── */
+    /* ── Saturation: smooth drive with volume compensation ── */
     inst->sat_smooth += SMOOTH_20MS * (inst->saturation - inst->sat_smooth);
     float sat = inst->sat_smooth;
-    /* Quadratic drive curve: 1 at 0%, ~3 at 50%, 8 at 100% — gentle warmth */
-    float drive = 1.0f + sat * sat * 7.0f;
-    /* Compensation: normalize at typical RMS level */
-    float sat_comp = 0.5f / (fast_tanh(0.5f * drive) + 0.001f);
+    /* Quadratic drive curve: 1 at 0%, ~10 at 50%, 20 at 100% — hotter distortion */
+    float drive = 1.0f + sat * sat * 19.0f;
+    /* Compensation: peak target 0.6, more distorted at high saturation but level stays controlled */
+    float sat_comp = 0.6f / (fast_tanh(0.6f * drive) + 0.001f);
 
     /* ── DJ filter: update biquad coefficients ── */
     inst->filter_smooth += 0.05f * (inst->filter - inst->filter_smooth);
