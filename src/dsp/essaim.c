@@ -167,7 +167,8 @@ typedef struct {
     int     dly_write;
     float   dly_lp_l, dly_lp_r;       /* 2-pole BBD lowpass state (cascaded one-poles) */
     float   dly_lp2_l, dly_lp2_r;     /* second pole */
-    float   dly_rate_smooth;           /* smoothed read position for tape warping */
+    float   dly_mix_smooth;            /* smoothed delay mix */
+    float   dly_rate_smooth;           /* smoothed delay rate */
     float   bbd_jitter_phase;          /* clock jitter LFO (very slow) */
 
     /* DJ filter (3-stage cascade, L+R) */
@@ -405,6 +406,7 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     inst->fine_smooth = 0.0f;
     inst->sat_smooth = 0.0f;
     inst->filter_smooth = 0.5f;
+    inst->dly_mix_smooth = 0.0f;
     inst->dly_rate_smooth = 0.5f;
     inst->current_voice = 0; inst->current_page = 1;
     inst->pad_lowest_note = 128;   /* unset; will be anchored on first note-on */
@@ -612,11 +614,14 @@ static void set_param(void *instance, const char *key, const char *val) {
     if (strcmp(key,"dly_feedback")==0) { inst->dly_feedback=clampf(f,0,0.95f); return; }
     if (strcmp(key,"dly_tone")==0)     { inst->dly_tone=clampf(f,0,1); return; }
     if (strcmp(key,"same_freq")==0) {
+        /* Save all frequencies on first press, then snap all to current voice's frequency */
         if (!inst->freq_backup_valid) {
             for (int i=0;i<N_VOICES;i++) inst->freq_backup[i]=inst->voices[i].frequency;
             inst->freq_backup_valid=1;
         }
-        for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency=clampf(f,0,1);
+        /* Snap all voices to current voice's frequency */
+        float target_freq = inst->voices[inst->current_voice].frequency;
+        for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency = target_freq;
         return;
     }
     if (strcmp(key,"same_speed")==0)   { for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=clampf(f,0.1f,40); return; }
@@ -952,12 +957,13 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
         }
     }
 
-    /* ── Delay: rate smoothing (~20ms settle — brief tape glide on knob turn, then stable) ── */
-    inst->dly_rate_smooth += 0.002f * (inst->dly_rate - inst->dly_rate_smooth);
+    /* ── Delay: smooth mix and rate to prevent clicks ── */
+    inst->dly_mix_smooth += SMOOTH_20MS * (inst->dly_mix - inst->dly_mix_smooth);
+    inst->dly_rate_smooth += 0.015f * (inst->dly_rate - inst->dly_rate_smooth);
     float dly_rate_s = inst->dly_rate_smooth;
+    float dly_mix = inst->dly_mix_smooth;
     float dly_tone = inst->dly_tone;
     float dly_fb = inst->dly_feedback;
-    float dly_mix = inst->dly_mix;
 
     /* ── Per-sample loop ── */
     for (int i = 0; i < frames; i++) {
