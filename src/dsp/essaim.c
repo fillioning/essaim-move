@@ -156,6 +156,10 @@ typedef struct {
     float   fine_smooth;   /* 10ms smoothed */
     float   freq_backup[N_VOICES]; /* saved frequencies before SameFreq */
     int     freq_backup_valid;
+    int     same_freq_active;     /* SameFreq lock: survives preset/rnd */
+    float   same_freq_value;      /* locked frequency value */
+    int     same_speed_active;    /* SameSpeed lock: survives preset/rnd */
+    float   same_speed_value;     /* locked speed value */
     float   saturation, sat_smooth;
     float   filter;         /* DJ filter: 0-0.5=LP, 0.5=bypass, 0.5-1=HP */
     float   filter_smooth;
@@ -289,6 +293,21 @@ static void randomize_patch(essaim_t *inst) {
         randomize_voice(inst, i);
         inst->voices[i].pan = rand_range(&inst->rng, -0.7f, 0.7f);
     }
+    /* Randomize FX with constrained ranges */
+    inst->saturation = rand_range(&inst->rng, 0.0f, 0.25f);
+    inst->filter     = rand_range(&inst->rng, 0.3f, 0.6f);
+    inst->dly_mix    = rand_range(&inst->rng, 0.0f, 0.4f);
+    inst->dly_feedback = rand_range(&inst->rng, 0.0f, 0.5f);
+    inst->dly_rate   = rand_range(&inst->rng, 0.004f, 4.0f);
+    inst->dly_tone   = rand_float(&inst->rng);
+
+    /* Preserve SameFreq / SameSpeed locks */
+    if (inst->same_freq_active) {
+        for (int i = 0; i < N_VOICES; i++) inst->voices[i].frequency = inst->same_freq_value;
+    }
+    if (inst->same_speed_active) {
+        for (int i = 0; i < N_VOICES; i++) inst->voices[i].speed = inst->same_speed_value;
+    }
 }
 
 static void randomize_pan(essaim_t *inst) {
@@ -351,15 +370,8 @@ static void apply_preset(essaim_t *inst, int idx) {
         inst->root_note = (int)(rand_float(&inst->rng) * 12) % 12;
         inst->transpose = 4; /* center */
         inst->fine = 0.0f;
-        inst->saturation = rand_range(&inst->rng, 0.0f, 0.2f);
-        inst->filter = 0.5f;
-        inst->dly_mix = rand_range(&inst->rng, 0.0f, 0.5f);
-        inst->dly_rate = rand_range(&inst->rng, 0.1f, 1.5f);
-        inst->dly_feedback = rand_range(&inst->rng, 0.1f, 0.6f);
-        inst->dly_tone = rand_range(&inst->rng, 0.2f, 0.8f);
         inst->dly_mode = (int)(rand_float(&inst->rng) * N_DELAY_MODES) % N_DELAY_MODES;
-        randomize_patch(inst);
-        inst->freq_backup_valid = 0;
+        randomize_patch(inst);  /* also randomizes FX + preserves SameFreq/SameSpeed */
         inst->preset = 0;
         return;
     }
@@ -401,7 +413,13 @@ static void apply_preset(essaim_t *inst, int idx) {
         else if (roll < 0.8f) v->mod_dest = 1;  /* 30% Vol+Filt */
         else v->mod_dest = 2;                   /* 20% Filter */
     }
-    inst->freq_backup_valid = 0;
+    /* Preserve SameFreq / SameSpeed locks */
+    if (inst->same_freq_active) {
+        for (int i = 0; i < N_VOICES; i++) inst->voices[i].frequency = inst->same_freq_value;
+    }
+    if (inst->same_speed_active) {
+        for (int i = 0; i < N_VOICES; i++) inst->voices[i].speed = inst->same_speed_value;
+    }
 }
 
 /* ── Lifecycle ─────────────────────────────────────────────────────────────── */
@@ -540,20 +558,27 @@ static void set_param(void *instance, const char *key, const char *val) {
                 case 0: inst->scale = (int)clampf(inst->scale+(int)delta, 0, N_SCALES-1); break;
                 case 1: inst->root_note = (int)clampf(inst->root_note+(int)delta, 0, 11); break;
                 case 2: if (delta != 0) randomize_patch(inst); break;
-                case 3: /* SameFreq — save backup on first use, then adjust all */
+                case 3: { /* SameFreq — save backup on first use, then adjust all */
                     if (!inst->freq_backup_valid) {
                         for (int i=0;i<N_VOICES;i++) inst->freq_backup[i]=inst->voices[i].frequency;
                         inst->freq_backup_valid=1;
                     }
-                    for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency = clampf(inst->voices[i].frequency+delta*0.01f,0,1);
-                    break;
+                    float nf = clampf(inst->voices[0].frequency+delta*0.01f,0,1);
+                    inst->same_freq_active=1; inst->same_freq_value=nf;
+                    for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency=nf;
+                } break;
                 case 4: /* InitFreq — restore from backup */
                     if (delta != 0 && inst->freq_backup_valid) {
                         for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency=inst->freq_backup[i];
                         inst->freq_backup_valid=0;
+                        inst->same_freq_active=0;
                     }
                     break;
-                case 5: for (int i=0;i<N_VOICES;i++) inst->voices[i].speed = clampf(inst->voices[i].speed+delta*0.05f,0.1f,40); break;
+                case 5: { /* SameSpeed — lock and adjust all */
+                    float spd = clampf(inst->voices[0].speed+delta*0.05f,0.1f,40);
+                    inst->same_speed_active=1; inst->same_speed_value=spd;
+                    for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=spd;
+                } break;
                 case 6: /* RndMod — randomize all voices' mod */
                     if (delta != 0) for (int i=0;i<N_VOICES;i++) inst->voices[i].mod = rand_mod_init(&inst->rng);
                     break;
@@ -618,6 +643,7 @@ static void set_param(void *instance, const char *key, const char *val) {
         if (atof(val)!=0 && inst->freq_backup_valid) {
             for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency=inst->freq_backup[i];
             inst->freq_backup_valid=0;
+            inst->same_freq_active=0;
         }
         return;
     }
@@ -632,24 +658,23 @@ static void set_param(void *instance, const char *key, const char *val) {
     if (strcmp(key,"dly_feedback")==0) { inst->dly_feedback=clampf(f,0,0.95f); return; }
     if (strcmp(key,"dly_tone")==0)     { inst->dly_tone=clampf(f,0,1); return; }
     if (strcmp(key,"same_freq")==0) {
-        /* Save all frequencies on first press, then snap all to current voice's frequency */
         if (!inst->freq_backup_valid) {
             for (int i=0;i<N_VOICES;i++) inst->freq_backup[i]=inst->voices[i].frequency;
             inst->freq_backup_valid=1;
         }
-        /* Snap all voices to current voice's frequency */
-        float target_freq = inst->voices[inst->current_voice].frequency;
+        float target_freq = clampf(f, 0, 1);
+        inst->same_freq_active=1; inst->same_freq_value=target_freq;
         for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency = target_freq;
         return;
     }
-    if (strcmp(key,"same_speed")==0)   { for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=clampf(f,0.1f,40); return; }
+    if (strcmp(key,"same_speed")==0)   { inst->same_speed_active=1; inst->same_speed_value=clampf(f,0.1f,40); for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=inst->same_speed_value; return; }
 
     voice_t *v = &inst->voices[inst->current_voice];
-    if (strcmp(key,"speed")==0)     { v->speed=clampf(f,0.1f,40); return; }
+    if (strcmp(key,"speed")==0)     { v->speed=clampf(f,0.1f,40); inst->same_speed_active=0; return; }
     if (strcmp(key,"mod")==0)       { v->mod=clampf(f,0,1); return; }
     if (strcmp(key,"decay")==0)     { v->decay=clampf(f,0.005f,2); return; }
     if (strcmp(key,"timbre")==0)    { v->timbre=clampf(f,0,1); return; }
-    if (strcmp(key,"frequency")==0) { v->frequency=clampf(f,0,1); return; }
+    if (strcmp(key,"frequency")==0) { v->frequency=clampf(f,0,1); inst->same_freq_active=0; return; }
     if (strcmp(key,"noisiness")==0) { v->noisiness=clampf(f,0,1); return; }
     if (strcmp(key,"cutoff")==0)    { v->cutoff=clampf(f,0,1); return; }
     if (strcmp(key,"volume")==0)    { v->volume=clampf(f,0,1); return; }
