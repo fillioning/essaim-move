@@ -30,6 +30,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: dist/essaim-module.tar.gz
+          body: "New Drone mode !"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -38,12 +39,12 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/v}"
           REPO="${{ github.repository }}"
           URL="https://github.com/$REPO/releases/download/v$VERSION/essaim-module.tar.gz"
-          echo "{\"version\": \"$VERSION\", \"download_url\": \"$URL\"}" > release.json
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
           git fetch origin "$BRANCH"
           git checkout -f "$BRANCH"
+          echo "{\"version\": \"$VERSION\", \"download_url\": \"$URL\"}" > release.json
           git add release.json
           git commit -m "chore: update release.json for v$VERSION [skip ci]"
           git push origin "$BRANCH"
