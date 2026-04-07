@@ -18,6 +18,20 @@
 #include <math.h>
 #include <stdint.h>
 
+/* ── Minimal host API (only fields needed for pad LED control) ─────────────── */
+typedef struct {
+    uint32_t api_version;
+    int sample_rate;
+    int frames_per_block;
+    uint8_t *mapped_memory;
+    int audio_out_offset;
+    int audio_in_offset;
+    void (*log)(const char *msg);
+    int (*midi_send_internal)(const uint8_t *msg, int len);
+} host_api_mini_t;
+
+static const host_api_mini_t *g_host = NULL;
+
 #define SAMPLE_RATE    44100.0f
 #define SR_INV         (1.0f / 44100.0f)
 #define N_VOICES       32
@@ -29,6 +43,7 @@
 
 #define SMOOTH_5MS   0.44f
 #define SMOOTH_20MS  0.134f
+#define SMOOTH_SPEED 0.05f   /* ~50ms — smooth speed transitions for drone use */
 
 /* ── Scale tables ──────────────────────────────────────────────────────────── */
 
@@ -181,6 +196,7 @@ typedef struct {
 
     uint32_t rng;
     int      pad_lowest_note;   /* anchors 32-pad range on first note */
+    int      drone_mode;        /* 0=Play (normal), 1=Drone (toggle voices) */
 } essaim_t;
 
 /* ── RNG ───────────────────────────────────────────────────────────────────── */
@@ -476,6 +492,22 @@ static void destroy_instance(void *instance) {
     if (inst) { free(inst->dly_buf_l); free(inst->dly_buf_r); free(inst); }
 }
 
+/* ── Pad LED control ───────────────────────────────────────────────────────── */
+
+/* Move pads send/receive notes starting at 68 (hardware constant).
+ * We use pad_lowest_note as the base when it has been anchored; otherwise 68. */
+static void send_pad_led(essaim_t *inst, int voice_idx, int on) {
+    if (!g_host || !g_host->midi_send_internal) return;
+    int base = (inst->pad_lowest_note == 128) ? 68 : inst->pad_lowest_note;
+    uint8_t note = (uint8_t)(base + voice_idx);
+    uint8_t msg[4] = {0x09, 0x90, note, on ? 100 : 0};
+    g_host->midi_send_internal(msg, 4);
+}
+
+static void send_all_pad_leds(essaim_t *inst, int on) {
+    for (int i = 0; i < N_VOICES; i++) send_pad_led(inst, i, on);
+}
+
 /* ── MIDI ──────────────────────────────────────────────────────────────────── */
 
 static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
@@ -496,13 +528,31 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
     if (idx < 0) idx += N_VOICES;  /* ensure positive modulo */
 
     inst->current_voice = idx;
-    if (status == 0x90 && vel > 0) {
-        inst->voices[idx].active = 1;
-        if (inst->voices[idx].env < 0.01f) inst->voices[idx].env = 0.01f;
-        inst->voices[idx].vel_speed_mult = 1.0f + (float)vel / 127.0f;
-    } else if (status == 0x80 || (status == 0x90 && vel == 0)) {
-        inst->voices[idx].active = 0;
-    } else if (status == 0xA0) {
+    if (inst->drone_mode == 1) {
+        /* Drone mode: pads are toggles; ignore note-off */
+        if (status == 0x90 && vel > 0) {
+            if (inst->voices[idx].active) {
+                inst->voices[idx].active = 0;  /* toggle off: fade out via release */
+                send_pad_led(inst, idx, 0);
+            } else {
+                inst->voices[idx].active = 1;  /* toggle on: drone indefinitely */
+                if (inst->voices[idx].env < 0.01f) inst->voices[idx].env = 0.01f;
+                inst->voices[idx].vel_speed_mult = 1.0f + (float)vel / 127.0f;
+                send_pad_led(inst, idx, 1);
+            }
+        }
+        /* Note-off: ignored in drone mode — release is handled by toggle */
+    } else {
+        /* Play mode: normal hold behaviour */
+        if (status == 0x90 && vel > 0) {
+            inst->voices[idx].active = 1;
+            if (inst->voices[idx].env < 0.01f) inst->voices[idx].env = 0.01f;
+            inst->voices[idx].vel_speed_mult = 1.0f + (float)vel / 127.0f;
+        } else if (status == 0x80 || (status == 0x90 && vel == 0)) {
+            inst->voices[idx].active = 0;
+        }
+    }
+    if (status == 0xA0) {
         /* Polyphonic aftertouch — pad pressure → speed: 0=1x, 127=2x */
         int aidx = (note - base) % N_VOICES;
         if (aidx < 0) aidx += N_VOICES;
@@ -524,7 +574,7 @@ static const knob_def_t VOICE_KNOBS[8] = {
     {"cutoff","Cutoff",0,1,0.01f},{"volume","Volume",0,1,0.01f},
 };
 
-static const char *GLOBAL_LABELS[8] = {"Scale","Root","RndPatch","SameFreq","InitFreq","SameSpd","RndMod","RndPan"};
+static const char *GLOBAL_LABELS[8] = {"Root","Scale","RndPatch","SameFreq","InitFreq","SameSpd","RndMod","RndPan"};
 static const char *FX_LABELS[8] = {"Transp","Fine","Satur","Filter","Dly Mix","Dly Rate","Dly Feed","Dly Tone"};
 
 static float *voice_param_ptr(voice_t *v, int idx) {
@@ -555,8 +605,8 @@ static void set_param(void *instance, const char *key, const char *val) {
 
         if (inst->current_page == 0) {
             switch (ki) {
-                case 0: inst->scale = (int)clampf(inst->scale+(int)delta, 0, N_SCALES-1); break;
-                case 1: inst->root_note = (int)clampf(inst->root_note+(int)delta, 0, 11); break;
+                case 0: inst->root_note = (int)clampf(inst->root_note+(int)delta, 0, 11); break;
+                case 1: inst->scale = (int)clampf(inst->scale+(int)delta, 0, N_SCALES-1); break;
                 case 2: if (delta != 0) randomize_patch(inst); break;
                 case 3: { /* SameFreq — save backup on first use, then adjust all */
                     if (!inst->freq_backup_valid) {
@@ -575,7 +625,7 @@ static void set_param(void *instance, const char *key, const char *val) {
                     }
                     break;
                 case 5: { /* SameSpeed — lock and adjust all */
-                    float spd = clampf(inst->voices[0].speed+delta*0.05f,0.1f,40);
+                    float spd = clampf(inst->voices[0].speed+delta*0.05f,0.05f,100);
                     inst->same_speed_active=1; inst->same_speed_value=spd;
                     for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=spd;
                 } break;
@@ -630,6 +680,23 @@ static void set_param(void *instance, const char *key, const char *val) {
         if (strcmp(val,"Off")==0) { inst->all_mono=0; return; }
         inst->all_mono = atof(val)!=0 ? 1 : 0; return;
     }
+    if (strcmp(key, "mode") == 0) {
+        if (strcmp(val,"Drone")==0) {
+            inst->drone_mode=1;
+            /* Light up any voices that are currently active */
+            for (int i=0; i<N_VOICES; i++)
+                if (inst->voices[i].active) send_pad_led(inst, i, 1);
+            return;
+        }
+        if (strcmp(val,"Play")==0) {
+            inst->drone_mode=0;
+            /* Kill all droning voices and clear all LEDs */
+            for (int i=0; i<N_VOICES; i++) inst->voices[i].active=0;
+            send_all_pad_leds(inst, 0);
+            return;
+        }
+        inst->drone_mode = (int)atof(val) != 0 ? 1 : 0; return;
+    }
 
     /* Button actions */
     if (strcmp(key,"preset")==0) {
@@ -667,7 +734,7 @@ static void set_param(void *instance, const char *key, const char *val) {
         for (int i=0;i<N_VOICES;i++) inst->voices[i].frequency = target_freq;
         return;
     }
-    if (strcmp(key,"same_speed")==0)   { inst->same_speed_active=1; inst->same_speed_value=clampf(f,0.1f,40); for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=inst->same_speed_value; return; }
+    if (strcmp(key,"same_speed")==0)   { inst->same_speed_active=1; inst->same_speed_value=clampf(f,0.05f,100); for (int i=0;i<N_VOICES;i++) inst->voices[i].speed=inst->same_speed_value; return; }
 
     voice_t *v = &inst->voices[inst->current_voice];
     if (strcmp(key,"speed")==0)     { v->speed=clampf(f,0.1f,40); inst->same_speed_active=0; return; }
@@ -709,6 +776,9 @@ static void set_param(void *instance, const char *key, const char *val) {
             inst->dly_feedback=dfb; inst->dly_tone=dtone;
             inst->dly_mode=dm; inst->all_mono=am; inst->fine=clampf(fin,-1,1);
             p += consumed;
+            /* Optional: drone_mode (new field, absent in older states) */
+            int drn=0;
+            if (sscanf(p," %d",&drn)==1) inst->drone_mode = drn ? 1 : 0;
         }
         for (int i=0; i<N_VOICES; i++) {
             float sp,mo,dc,tb,fq,ns,co,vo; int svf_m,lfo_s,mod_d; float svf_r,pn;
@@ -728,14 +798,14 @@ static void set_param(void *instance, const char *key, const char *val) {
 /* ── ui_hierarchy JSON ── */
 static const char UI_HIERARCHY_JSON[] =
     "{\"modes\":null,\"levels\":{"
-    "\"root\":{\"name\":\"Essaim\",\"knobs\":[\"scale\",\"root_note\",\"rnd_patch\",\"same_freq\",\"init_freq\",\"same_speed\",\"rnd_mod\",\"rnd_pan\"],\"params\":["
+    "\"root\":{\"name\":\"Essaim\",\"knobs\":[\"root_note\",\"scale\",\"rnd_patch\",\"same_freq\",\"init_freq\",\"same_speed\",\"rnd_mod\",\"rnd_pan\"],\"params\":["
       "{\"level\":\"Global\",\"label\":\"Global\"},"
       "{\"level\":\"FX\",\"label\":\"FX\"},"
       "{\"level\":\"Voice\",\"label\":\"Voice\"}"
     "]},"
     "\"Global\":{\"name\":\"Global\","
-      "\"knobs\":[\"scale\",\"root_note\",\"rnd_patch\",\"same_freq\",\"init_freq\",\"same_speed\",\"rnd_mod\",\"rnd_pan\"],"
-      "\"params\":[\"scale\",\"root_note\",\"rnd_patch\",\"same_freq\",\"init_freq\",\"same_speed\",\"rnd_mod\",\"rnd_pan\",\"all_mono\",\"rnd_voice\",\"preset\"]"
+      "\"knobs\":[\"root_note\",\"scale\",\"rnd_patch\",\"same_freq\",\"init_freq\",\"same_speed\",\"rnd_mod\",\"rnd_pan\"],"
+      "\"params\":[\"root_note\",\"scale\",\"rnd_patch\",\"same_freq\",\"init_freq\",\"same_speed\",\"rnd_mod\",\"rnd_pan\",\"all_mono\",\"rnd_voice\",\"preset\",\"mode\"]"
     "},"
     "\"FX\":{\"name\":\"FX\","
       "\"knobs\":[\"transpose\",\"fine\",\"saturation\",\"filter\",\"dly_mix\",\"dly_rate\",\"dly_feedback\",\"dly_tone\"],"
@@ -749,14 +819,14 @@ static const char UI_HIERARCHY_JSON[] =
 
 static const char CHAIN_PARAMS_JSON[] =
     "["
-    "{\"key\":\"scale\",\"name\":\"Scale\",\"type\":\"enum\","
-      "\"options\":[\"Chromatic\",\"Major\",\"Minor\",\"Pentatonic\",\"Whole Tone\",\"Harm Minor\"]},"
     "{\"key\":\"root_note\",\"name\":\"Root Note\",\"type\":\"enum\","
       "\"options\":[\"C\",\"C#\",\"D\",\"D#\",\"E\",\"F\",\"F#\",\"G\",\"G#\",\"A\",\"A#\",\"B\"]},"
+    "{\"key\":\"scale\",\"name\":\"Scale\",\"type\":\"enum\","
+      "\"options\":[\"Chromatic\",\"Major\",\"Minor\",\"Pentatonic\",\"Whole Tone\",\"Harm Minor\"]},"
     "{\"key\":\"rnd_patch\",\"name\":\"Rnd Patch\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":1},"
     "{\"key\":\"same_freq\",\"name\":\"Same Freq\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.01},"
     "{\"key\":\"init_freq\",\"name\":\"Init Freq\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":1},"
-    "{\"key\":\"same_speed\",\"name\":\"Same Speed\",\"type\":\"float\",\"min\":0.1,\"max\":40,\"step\":0.1},"
+    "{\"key\":\"same_speed\",\"name\":\"Same Speed\",\"type\":\"float\",\"min\":0.05,\"max\":100,\"step\":0.05},"
     "{\"key\":\"rnd_mod\",\"name\":\"Rnd Mod\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":1},"
     "{\"key\":\"rnd_pan\",\"name\":\"Rnd Pan\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":1},"
     "{\"key\":\"all_mono\",\"name\":\"All Mono\",\"type\":\"enum\",\"options\":[\"Off\",\"On\"]},"
@@ -765,6 +835,7 @@ static const char CHAIN_PARAMS_JSON[] =
       "\"options\":[\"Init\",\"Swarm\",\"Drift\",\"Pulse\",\"Fog\",\"Hive\",\"Crystal\",\"Rumble\",\"Scatter\","
       "\"Choir\",\"Glitch\",\"Tide\",\"Spark\",\"Forest\",\"Metal\",\"Breath\",\"Clockwork\","
       "\"Aurora\",\"Dust\",\"Thunder\",\"Bells\",\"Swamp\",\"Firefly\",\"Cascade\",\"Zen\"]},"
+    "{\"key\":\"mode\",\"name\":\"Mode\",\"type\":\"enum\",\"options\":[\"Play\",\"Drone\"]},"
     "{\"key\":\"transpose\",\"name\":\"Transpose\",\"type\":\"enum\","
       "\"options\":[\"-3oct\",\"-2oct\",\"-1oct\",\"-3rd\",\"0\",\"+3rd\",\"+5th\",\"+1oct\",\"+2oct\"]},"
     "{\"key\":\"fine\",\"name\":\"Fine\",\"type\":\"float\",\"min\":-1,\"max\":1,\"step\":0.01},"
@@ -824,8 +895,8 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
 
         if (inst->current_page==0) {
             switch (idx) {
-                case 0: return snprintf(buf,buf_len,"%s",SCALE_NAMES[inst->scale]);
-                case 1: return snprintf(buf,buf_len,"%s",NOTE_NAMES[inst->root_note]);
+                case 0: return snprintf(buf,buf_len,"%s",NOTE_NAMES[inst->root_note]);
+                case 1: return snprintf(buf,buf_len,"%s",SCALE_NAMES[inst->scale]);
                 case 2: case 4: case 6: case 7: return snprintf(buf,buf_len,"Turn");
                 case 3: return snprintf(buf,buf_len,"%d%%",(int)(inst->voices[inst->current_voice].frequency*100));
                 case 5: return snprintf(buf,buf_len,"%.1fHz",inst->voices[inst->current_voice].speed);
@@ -871,6 +942,7 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     if (strcmp(key,"scale")==0) return snprintf(buf,buf_len,"%s",SCALE_NAMES[inst->scale]);
     if (strcmp(key,"root_note")==0) return snprintf(buf,buf_len,"%s",NOTE_NAMES[inst->root_note]);
     if (strcmp(key,"all_mono")==0) return snprintf(buf,buf_len,"%s",inst->all_mono?"On":"Off");
+    if (strcmp(key,"mode")==0)     return snprintf(buf,buf_len,"%s",inst->drone_mode?"Drone":"Play");
     if (strcmp(key,"preset")==0) return snprintf(buf,buf_len,"%s",PRESETS[inst->preset].name);
     if (strcmp(key,"rnd_patch")==0||strcmp(key,"rnd_mod")==0||strcmp(key,"rnd_voice")==0||strcmp(key,"init_freq")==0||strcmp(key,"rnd_pan")==0) return snprintf(buf,buf_len,"0");
     if (strcmp(key,"same_freq")==0) return snprintf(buf,buf_len,"%.4f",inst->voices[inst->current_voice].frequency);
@@ -910,10 +982,10 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     }
 
     if (strcmp(key,"state")==0) {
-        int pos=snprintf(buf,buf_len,"%d %d %d %f %f %f %f %f %f %d %d %f",
+        int pos=snprintf(buf,buf_len,"%d %d %d %f %f %f %f %f %f %d %d %f %d",
             inst->root_note,inst->scale,inst->transpose,
             inst->saturation,inst->filter,inst->dly_mix,inst->dly_rate,
-            inst->dly_feedback,inst->dly_tone,inst->dly_mode,inst->all_mono,inst->fine);
+            inst->dly_feedback,inst->dly_tone,inst->dly_mode,inst->all_mono,inst->fine,inst->drone_mode);
         for (int i=0;i<N_VOICES&&pos<buf_len-1;i++) {
             voice_t *vi=&inst->voices[i];
             pos+=snprintf(buf+pos,buf_len-pos," %f %f %f %f %f %f %f %f %d %f %f %d %d",
@@ -946,7 +1018,7 @@ static void render_block(void *instance, int16_t *out_lr, int frames) {
         vc[vi].alive = (v->active || v->env >= 0.001f);
         if (!vc[vi].alive) continue;
 
-        v->speed_s     += SMOOTH_5MS  * (v->speed     - v->speed_s);
+        v->speed_s     += SMOOTH_SPEED * (v->speed     - v->speed_s);
         v->mod_s       += SMOOTH_5MS  * (v->mod       - v->mod_s);
         v->decay_s     += SMOOTH_5MS  * (v->decay     - v->decay_s);
         v->timbre_s    += SMOOTH_5MS  * (v->timbre    - v->timbre_s);
@@ -1208,7 +1280,7 @@ typedef struct {
 
 __attribute__((visibility("default")))
 plugin_api_v2_t* move_plugin_init_v2(const void *host) {
-    (void)host;
+    g_host = (const host_api_mini_t *)host;
     static plugin_api_v2_t api = {
         .api_version      = 2,
         .create_instance  = create_instance,

@@ -1,7 +1,7 @@
 {
   "id": "essaim",
   "name": "Essaim",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "api_version": 2,
   "description": "32-voice rhythmic oscillator swarm",
   "author": "fillioning",
@@ -19,7 +19,7 @@
       "levels": {
         "root": {
           "name": "Essaim",
-          "knobs": ["scale", "root_note", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan"],
+          "knobs": ["root_note", "scale", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan"],
           "params": [
             {"level": "Global", "label": "Global"},
             {"level": "FX", "label": "FX"},
@@ -28,8 +28,8 @@
         },
         "Global": {
           "name": "Global",
-          "knobs": ["scale", "root_note", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan"],
-          "params": ["scale", "root_note", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan", "all_mono", "rnd_voice", "preset"]
+          "knobs": ["root_note", "scale", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan"],
+          "params": ["root_note", "scale", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan", "all_mono", "rnd_voice", "preset", "mode"]
         },
         "FX": {
           "name": "FX",
