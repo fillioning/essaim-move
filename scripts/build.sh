@@ -18,6 +18,7 @@ CONTAINER_ID=$(MSYS_NO_PATHCONV=1 docker create schwung-builder \
     /build/src/dsp/${MODULE_ID}.c \
     -lm && \
   cp /build/src/module.json /build/dist/${MODULE_ID}/ && \
+  if [ -f /build/src/help.json ]; then cp /build/src/help.json /build/dist/${MODULE_ID}/; fi && \
   cd /build/dist && tar -czf ${MODULE_ID}-module.tar.gz ${MODULE_ID}/")
 
 # Copy source into container's /build/src (WORKDIR already exists)
