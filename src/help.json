@@ -1,0 +1,161 @@
+{
+  "title": "Essaim",
+  "children": [
+    {
+      "title": "About",
+      "lines": [
+        "32-voice rhythmic",
+        "oscillator swarm.",
+        "",
+        "Polyphonic self-",
+        "triggering voices",
+        "with envelope -> FM,",
+        "SVF filtering, LFO",
+        "modulation routing,",
+        "scale quantization,",
+        "delay & saturation.",
+        "",
+        "Each pad = one voice",
+        "toggle (latching).",
+        "Voice self-triggers",
+        "on its own clock when",
+        "active."
+      ]
+    },
+    {
+      "title": "Pads",
+      "lines": [
+        "Notes 36-67 toggle",
+        "32 voices (1 per pad).",
+        "",
+        "Pad on = voice active",
+        "and self-triggering at",
+        "its Speed rate.",
+        "",
+        "Aftertouch (poly AT,",
+        "0xA0) modulates voice",
+        "expression on hold.",
+        "",
+        "Drone Mode (General):",
+        "pads become latching",
+        "toggles for sustained",
+        "drone arrangements."
+      ]
+    },
+    {
+      "title": "Page: Global",
+      "lines": [
+        "K1 Root Note",
+        "K2 Scale",
+        "    chromatic, major,",
+        "    minor, penta,",
+        "    blues, dorian...",
+        "K3 Rnd Patch",
+        "    randomize whole",
+        "    plugin",
+        "K4 SameFreq",
+        "    one master freq",
+        "K5 Init Freq",
+        "    restore defaults",
+        "K6 SameSpeed",
+        "    one master speed",
+        "K7 Rnd Mod",
+        "    randomize mod",
+        "    routing per voice",
+        "K8 Rnd Pan",
+        "",
+        "Menu-only:",
+        " Pad Mode (Play/Drone),",
+        " Preset, Drone Mode"
+      ]
+    },
+    {
+      "title": "Page: FX",
+      "lines": [
+        "K1 Transpose",
+        "    +/- semitones",
+        "K2 Fine",
+        "    +/- cents",
+        "K3 Saturation",
+        "    tanh drive",
+        "K4 Filter",
+        "    global SVF cutoff",
+        "K5 Dly Mix",
+        "K6 Dly Rate",
+        "    BBD-style warm",
+        "K7 Dly Feedback",
+        "K8 Dly Tone",
+        "    Dark<Clean>Brite",
+        "",
+        "Delay is per-voice",
+        "fed (pre-fader sends)."
+      ]
+    },
+    {
+      "title": "Page: Voice",
+      "lines": [
+        "Per-voice editing for",
+        "the selected pad.",
+        "",
+        "K1 Speed",
+        "    self-trigger rate",
+        "K2 Mod",
+        "    env -> FM amount",
+        "K3 Decay",
+        "    AD envelope",
+        "K4 Timbre",
+        "    waveform shape",
+        "K5 Frequency",
+        "    20-20000 Hz",
+        "K6 Noisiness",
+        "    osc vs noise mix",
+        "K7 Cutoff",
+        "    SVF filter",
+        "K8 Volume"
+      ]
+    },
+    {
+      "title": "Presets",
+      "lines": [
+        "Menu-only Preset enum",
+        "spans factory swarm",
+        "scenes.",
+        "",
+        "Each preset defines",
+        "global + per-voice",
+        "ranges; firing the",
+        "preset randomizes",
+        "all 32 voices within",
+        "those ranges,",
+        "giving consistent",
+        "character + organic",
+        "variation."
+      ]
+    },
+    {
+      "title": "Tips",
+      "lines": [
+        "Hit a pad, twist Voice",
+        " knobs: edit only",
+        " that voice live.",
+        "",
+        "SameSpeed forces all",
+        " active voices to one",
+        " rate = phased grids",
+        " of identical clicks.",
+        "",
+        "SameFreq + minor",
+        " Scale + Rnd Mod:",
+        " harmonic clouds.",
+        "",
+        "Drone Mode latches",
+        " pads on retrigger,",
+        " for sustained pads.",
+        "",
+        "Saturation + slow",
+        " Delay tone Dark:",
+        " warm BBD echo."
+      ]
+    }
+  ]
+}
