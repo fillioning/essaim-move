@@ -24,17 +24,34 @@
             {"level": "Global", "label": "Global"},
             {"level": "FX", "label": "FX"},
             {"level": "Voice", "label": "Voice"}
-          ]
+          ,
+            { "key": "root_note", "short_name": "Note" },
+            { "key": "rnd_patch", "short_name": "Patch" },
+            { "key": "same_freq", "short_name": "Same" },
+            { "key": "init_freq", "short_name": "Init" },
+            { "key": "same_speed", "short_name": "Speed" },
+            { "key": "rnd_mod", "short_name": "Rnd" },
+            { "key": "rnd_pan", "short_name": "Pan" }]
         },
         "Global": {
           "name": "Global",
           "knobs": ["root_note", "scale", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan"],
-          "params": ["root_note", "scale", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan", "all_mono", "rnd_voice", "preset", "mode"]
+          "params": ["root_note", "scale", "rnd_patch", "same_freq", "init_freq", "same_speed", "rnd_mod", "rnd_pan", "all_mono", "rnd_voice", "preset", "mode",
+        { "key": "root_note", "short_name": "Note" },
+        { "key": "rnd_patch", "short_name": "Patch" },
+        { "key": "same_freq", "short_name": "Same" },
+        { "key": "init_freq", "short_name": "Init" },
+        { "key": "same_speed", "short_name": "Speed" },
+        { "key": "rnd_mod", "short_name": "Rnd" },
+        { "key": "rnd_pan", "short_name": "Pan" }]
         },
         "FX": {
           "name": "FX",
           "knobs": ["transpose", "fine", "saturation", "filter", "dly_mix", "dly_rate", "dly_feedback", "dly_tone"],
-          "params": ["transpose", "fine", "saturation", "filter", "dly_mix", "dly_rate", "dly_feedback", "dly_tone", "dly_mode"]
+          "params": ["transpose", "fine", "saturation", "filter", "dly_mix", "dly_rate", "dly_feedback", "dly_tone", "dly_mode",
+        { "key": "dly_rate", "short_name": "Rate" },
+        { "key": "dly_feedback", "short_name": "Feed" },
+        { "key": "dly_tone", "short_name": "Tone" }]
         },
         "Voice": {
           "name": "Voice",
